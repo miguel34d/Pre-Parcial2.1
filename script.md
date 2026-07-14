@@ -30,7 +30,7 @@
 | Switch1 | 20251367 | *(no configurado)* | miguel | 20251367 |
 | Switch2 | 20251367 | *(no configurado)* | miguel | 20251367 |
 
-> En Peer-A y Peer-B, `miguel` / `20251367` es el usuario local de respaldo (fallback) configurado con `username miguel privilege 15 secret 20251367`. Si el servidor RADIUS (NPS) esta arriba y respondiendo, tambien puedes entrar con cualquier usuario de AD que hayas creado en la seccion 7.4 (ADMINS-15, OPS-10, USERS-1), segun el nivel de privilegio que le hayas asignado ahi.
+> En Peer-A y Peer-B, `miguel` / `20251367` es el usuario local de respaldo (fallback) configurado con `username miguel privilege 15 secret 20251367`. Si el servidor RADIUS (NPS) esta arriba y respondiendo, tambien puedes entrar con cualquier usuario de AD creado en la seccion 7.5 (ADMINS-15, OPS-10, USERS-1), segun el nivel de privilegio que le hayas asignado ahi.
 
 > **R-ISP no tiene `enable secret` ni password de consola/SSH en esta guia**, porque en la seccion 2 solo se le puso `banner motd` y las interfaces - no se penso como dispositivo administrable remotamente, solo como transito IP puro del ISP. Si tu profesor pide que R-ISP tambien tenga clave de enable/consola, dimelo y lo agrego (por consistencia, seria `20251367` igual que los demas).
 
@@ -486,49 +486,221 @@ write memory
 ## 7. Windows Server 2022 (roles: AD DS, IIS, NPS)
 
 ### 7.1 Direccionamiento
-- IP: `10.13.67.10 /24`, gateway `10.13.67.1`, DNS: `127.0.0.1` (se vuelve su propio DNS al instalar AD).
 
-### 7.2 Active Directory Domain Services
-1. Administrador del servidor -> Agregar roles y caracteristicas -> **AD DS**.
-2. Promover a controlador de dominio -> Nuevo bosque -> dominio `miguel.local`.
-3. Reiniciar.
+**GUI**
+```
+Panel de control > Redes e Internet > Centro de redes y recursos compartidos
+> Cambiar configuracion del adaptador > Ethernet0 > Propiedades > IPv4
 
-### 7.3 IIS
-1. Agregar rol **Servidor Web (IIS)**.
-2. Deja el sitio predeterminado en el puerto 80 (coincide con el ACL que solo permite HTTP).
+IP:            10.13.67.10
+Mascara:       255.255.255.0
+Gateway:       10.13.67.1
+DNS preferido: 127.0.0.1
+```
 
-### 7.4 Grupos y usuarios para niveles de acceso (NPS)
-En **Usuarios y equipos de AD**, crea:
+**PowerShell (alternativa)**
+```powershell
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 10.13.67.10 -PrefixLength 24 -DefaultGateway 10.13.67.1
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 127.0.0.1
+Rename-Computer -NewName "WIN-DC01" -Restart
+```
 
-| Grupo | Nivel de privilegio |
-|---|---|
-| ADMINS-15 | 15 |
-| OPS-10 | 10 |
-| USERS-1 | 1 |
+### 7.2 Instalar rol AD DS y promover a controlador de dominio
 
-Crea un usuario de prueba en cada grupo.
+```powershell
+Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
+```
 
-### 7.5 Instalar y configurar NPS (RADIUS)
-1. Agregar rol **Servidor de directivas de redes (NPS)**.
-2. **Clientes RADIUS** -> agregar dos clientes:
-   - Nombre: Peer-A, IP: 200.13.67.2 (o 10.13.67.1 si el origen del paquete es la LAN), secreto compartido: `MiguelRadius2025!`
-   - Nombre: Peer-B, IP: 200.13.67.6, mismo secreto compartido.
-3. **Directivas de red** -> crear 3 directivas (una por grupo), condicion = "Windows Groups" = ADMINS-15/OPS-10/USERS-1.
-4. En cada directiva, pestana **Configuracion** -> *Atributos RADIUS estandar* -> agrega el atributo **Vendor Specific**:
-   - Vendor: Cisco (codigo 9)
-   - Atributo: `cisco-av-pair`
-   - Valor: `shell:priv-lvl=15` (o `=10`, `=1` segun el grupo).
-5. En autenticacion, habilita **PAP** (o MS-CHAPv2 si prefieres cifrado, pero requiere el certificado - ver 7.6).
+```powershell
+Install-ADDSForest `
+  -DomainName "miguel.local" `
+  -DomainNetbiosName "MIGUEL" `
+  -InstallDns:$true `
+  -SafeModeAdministratorPassword (ConvertTo-SecureString "Segura2121..." -AsPlainText -Force) `
+  -Force:$true
+```
 
-### 7.6 Importar certificado (por que y como)
-El certificado es necesario si usas NPS con PEAP/EAP, o IPsec con autenticacion por certificado (alternativa a pre-shared key).
+```
+! El servidor reinicia automaticamente al finalizar
+```
 
-Pasos:
-1. `certlm.msc` (Administrador de certificados del equipo local).
-2. Si tienes una CA propia, solicita un certificado via **Plantillas de certificado -> Servidor Web/Autenticacion de equipo**, o
-3. Si te dieron un `.pfx`: clic derecho en **Personal -> Certificados -> Todas las tareas -> Importar**, selecciona el `.pfx`, ingresa la contrasena.
-4. En **NPS -> Directivas de red -> [tu directiva] -> Restricciones -> Metodos de autenticacion -> EAP -> Microsoft: EAP protegido (PEAP)**, selecciona el certificado importado.
-5. Verifica que el certificado aparezca tambien en **Entidades de certificacion raiz de confianza** si es autofirmado.
+**Verificacion post-reinicio**
+```powershell
+Get-ADDomain
+Get-Service NTDS,DNS,Netlogon
+dcdiag /v
+```
+
+### 7.3 Unidades organizativas (OU) - desde la interfaz
+
+```
+dsa.msc (Usuarios y equipos de Active Directory)
+
+Clic derecho en miguel.local > Nuevo > Unidad organizativa
+  Nombre: Grupos
+  (desmarcar "Proteger contenedor contra eliminacion accidental" si se quiere poder borrarla luego)
+  Aceptar
+
+Clic derecho en miguel.local > Nuevo > Unidad organizativa
+  Nombre: Usuarios
+  Aceptar
+```
+
+### 7.4 IIS
+
+```powershell
+Install-WindowsFeature Web-Server -IncludeManagementTools
+```
+
+```
+! Sitio predeterminado queda en puerto 80 (coincide con ACL_HACIA_SERVIDOR)
+```
+
+### 7.5 Grupos y usuarios para niveles de acceso (NPS) - desde la interfaz
+
+**Crear los 3 grupos**
+```
+dsa.msc > clic derecho en OU "Grupos" > Nuevo > Grupo
+
+Grupo 1:
+  Nombre de grupo: ADMINS-15
+  Ambito de grupo: Global
+  Tipo de grupo: Seguridad
+  Aceptar
+
+Grupo 2:
+  Nombre de grupo: OPS-10
+  Ambito de grupo: Global
+  Tipo de grupo: Seguridad
+  Aceptar
+
+Grupo 3:
+  Nombre de grupo: USERS-1
+  Ambito de grupo: Global
+  Tipo de grupo: Seguridad
+  Aceptar
+```
+
+**Usuarios a crear**
+
+| Nombre completo | Nombre de inicio de sesion (SamAccountName) | Grupo | Nivel |
+|---|---|---|---|
+| Miguel Ramirez Meli | mramirez | ADMINS-15 | 15 |
+| Ronald Arcangel Nunez | rarcangel | ADMINS-15 | 15 |
+| Yolanda Peralta Cruz | yperalta | OPS-10 | 10 |
+| Franklin De la Rosa Gomez | fdelarosa | OPS-10 | 10 |
+| Carmen Sosa Bautista | csosa | USERS-1 | 1 |
+| Elvis Reynoso Tavarez | ereynoso | USERS-1 | 1 |
+
+**Crear cada usuario (repetir para los 6)**
+```
+dsa.msc > clic derecho en OU "Usuarios" > Nuevo > Usuario
+
+Pantalla 1:
+  Nombre:            Miguel
+  Apellidos:         Ramirez Meli
+  Nombre completo:   Miguel Ramirez Meli          (se autocompleta)
+  Nombre de inicio de sesion de usuario: mramirez  (@miguel.local ya viene fijo)
+  Siguiente
+
+Pantalla 2:
+  Contrasena:               Segura2121...
+  Confirmar contrasena:     Segura2121...
+  Desmarcar: "El usuario debe cambiar la contrasena en el siguiente inicio de sesion"
+  Marcar:    "La contrasena nunca expira"   (opcional, para no tener problemas en el lab)
+  Siguiente
+
+Pantalla 3:
+  Finalizar
+```
+```
+Repetir el mismo procedimiento cambiando solo los datos de la tabla de arriba para:
+  rarcangel, yperalta, fdelarosa, csosa, ereynoso
+```
+
+**Agregar cada usuario a su grupo**
+```
+dsa.msc > OU "Usuarios" > doble clic en el usuario > pestana "Miembro de"
+  > Agregar... > escribir el nombre del grupo (ADMINS-15 / OPS-10 / USERS-1) > Comprobar nombres > Aceptar
+  > Aceptar
+
+Repetir para los 6 usuarios segun la tabla:
+  mramirez, rarcangel   -> ADMINS-15
+  yperalta, fdelarosa   -> OPS-10
+  csosa, ereynoso       -> USERS-1
+```
+
+**Verificacion**
+```
+dsa.msc > OU "Grupos" > doble clic en ADMINS-15 > pestana "Miembros" > confirmar mramirez y rarcangel
+dsa.msc > OU "Grupos" > doble clic en OPS-10    > pestana "Miembros" > confirmar yperalta y fdelarosa
+dsa.msc > OU "Grupos" > doble clic en USERS-1   > pestana "Miembros" > confirmar csosa y ereynoso
+```
+
+### 7.6 Instalar y configurar NPS (RADIUS)
+
+```powershell
+Install-WindowsFeature NPAS -IncludeManagementTools
+```
+
+**Clientes RADIUS**
+```
+Herramientas administrativas > Servidor de directivas de redes (nps.msc)
+Clientes y servidores RADIUS > Clientes RADIUS > Nuevo
+
+Nombre: Peer-A   | IP: 200.13.67.2 | Secreto compartido: MiguelRadius2025!
+Nombre: Peer-B   | IP: 200.13.67.6 | Secreto compartido: MiguelRadius2025!
+```
+
+**Directivas de red (una por grupo)**
+```
+Directivas > Directivas de red > Nueva
+
+Directiva 1: NPS-ADMINS-15
+  Condicion: Windows Groups = ADMINS-15
+  Conceder acceso: Si
+  Autenticacion: PAP (o MS-CHAPv2 si se importa certificado)
+  Atributos RADIUS estandar > Vendor Specific:
+    Vendor: Cisco
+    Atributo: cisco-av-pair
+    Valor: shell:priv-lvl=15
+
+Directiva 2: NPS-OPS-10
+  Condicion: Windows Groups = OPS-10
+  cisco-av-pair valor: shell:priv-lvl=10
+
+Directiva 3: NPS-USERS-1
+  Condicion: Windows Groups = USERS-1
+  cisco-av-pair valor: shell:priv-lvl=1
+```
+
+**Orden de evaluacion**
+```
+Mover NPS-ADMINS-15 arriba de NPS-OPS-10, y este arriba de NPS-USERS-1
+```
+
+### 7.7 Importar certificado (solo si se usa PEAP/EAP)
+
+```
+certlm.msc
+Personal > Certificados > Todas las tareas > Importar
+  Archivo: certificado.pfx
+  Contrasena: (la del .pfx)
+
+NPS > Directivas de red > [directiva] > Restricciones > Metodos de autenticacion
+  > EAP > Microsoft: EAP protegido (PEAP) > Seleccionar certificado importado
+
+Entidades de certificacion raiz de confianza > verificar que el certificado aparezca ahi
+```
+
+### 7.8 Verificacion final del dominio
+
+```powershell
+Get-ADDomain
+Get-ADUser -Filter * -SearchBase "OU=Usuarios,DC=miguel,DC=local"
+Get-ADGroup -Filter * -SearchBase "OU=Grupos,DC=miguel,DC=local"
+nltest /dsgetdc:miguel.local
+```
 
 ---
 
@@ -543,14 +715,14 @@ Pasos:
 | DHCP para la LAN | Seccion 4, parte 6 |
 | Ruta por defecto | Secciones 2-4 |
 | NAT | Secciones 3-4 |
-| Autenticacion por RADIUS | Secciones 3-4, parte RADIUS + seccion 7.5 |
+| Autenticacion por RADIUS | Secciones 3-4, parte RADIUS + seccion 7.6 |
 | Comunicacion entre LANs solo por VPN | Seccion 5.A (rutas apuntan a Tunnel0) |
 | Solo HTTP + ICMP al servidor | ACL_HACIA_SERVIDOR (seccion 3, parte 7), aplicada en Tunnel0 de Peer-A |
 | VPN L2TP + IPsec | Seccion 5.C (documentada, no aplicable en este feature-set) |
 | VPN IPsec + GRE | Seccion 5.A (la que se entrega) |
 | ISP sin protocolo de enrutamiento | Seccion 2 |
 | Windows Server: AD, IIS, NPS | Seccion 7 |
-| NPS niveles 15/10/1 | Seccion 7.4 y 7.5 |
+| NPS niveles 15/10/1 | Seccion 7.5 y 7.6 |
 | Direccionamiento por matricula | Seccion 1 |
 | Credenciales VPN por matricula | Seccion 1 y 5.A (usuario=2025, clave=1367) |
 
@@ -563,4 +735,5 @@ Pasos:
 - **RADIUS**: se cambio a la sintaxis clasica de una linea (`radius-server host ...`) porque el bloque moderno (`radius server NAME` + subcomandos) no es compatible con IOS 12.4(25d).
 - **`crypto key generate rsa`**: ahora funciona porque se agrego un `exit` explicito despues de configurar `line vty 0 4`, así el `ip domain-name` se aplica en modo de configuracion global (antes se estaba ejecutando por error dentro de `(config-line)#`).
 - **VPN usuario/clave (2025/1367)**: se cambio de un `crypto isakmp key` global anonimo a un `crypto keyring 2025` con clave `1367`, para que el "usuario" de la matricula quede visible y verificable directamente en la configuracion (`show crypto keyring`), no solo en la tabla de la seccion 1.
-- Todas las claves (`20251367`, `MiguelRadius2025!`, etc.) son ejemplos - cambialas si tu institucion exige un estandar distinto.
+- **Windows Server (seccion 7)**: se reemplazo la version resumida por comandos completos de `Install-ADDSForest`, creacion de OUs, grupos, 6 usuarios de AD con nombres reales repartidos en ADMINS-15/OPS-10/USERS-1, IIS y NPS con RADIUS clients y directivas Vendor Specific (`cisco-av-pair`).
+- Todas las claves (`20251367`, `MiguelRadius2025!`, `Segura2121...`, etc.) son ejemplos - cambialas si tu institucion exige un estandar distinto.
