@@ -505,30 +505,65 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 127.0.0.
 Rename-Computer -NewName "WIN-DC01" -Restart
 ```
 
-### 7.2 Instalar rol AD DS y promover a controlador de dominio
-
-```powershell
-Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
-```
-
-```powershell
-Install-ADDSForest `
-  -DomainName "miguel.local" `
-  -DomainNetbiosName "MIGUEL" `
-  -InstallDns:$true `
-  -SafeModeAdministratorPassword (ConvertTo-SecureString "Segura2121..." -AsPlainText -Force) `
-  -Force:$true
-```
+### 7.2 Instalar rol AD DS y promover a controlador de dominio - solo con clicks
 
 ```
-! El servidor reinicia automaticamente al finalizar
+Administrador del servidor > Panel > Agregar roles y caracteristicas
+
+Asistente para agregar roles y caracteristicas:
+  Tipo de instalacion:        Instalacion basada en caracteristicas o roles > Siguiente
+  Seleccionar servidor:       (dejar el servidor local seleccionado) > Siguiente
+  Roles de servidor:          marcar "Servicios de dominio de Active Directory"
+                              > se abre ventana emergente > clic "Agregar caracteristicas"
+                              > Siguiente
+  Caracteristicas:            Siguiente (sin marcar nada extra)
+  AD DS (info):               Siguiente
+  Confirmacion:                clic "Instalar"
+  Esperar a que termine       > Cerrar
 ```
 
-**Verificacion post-reinicio**
-```powershell
-Get-ADDomain
-Get-Service NTDS,DNS,Netlogon
-dcdiag /v
+```
+Administrador del servidor > icono de notificaciones (bandera con !)
+  > clic en "Promover este servidor a controlador de dominio"
+
+Asistente de configuracion de Servicios de dominio de Active Directory:
+
+  Configuracion de implementacion:
+    Seleccionar: "Agregar un nuevo bosque"
+    Nombre de dominio raiz: miguel.local
+    Siguiente
+
+  Opciones del controlador de dominio:
+    Nivel funcional del bosque:  Windows Server 2016 (o el mas alto disponible)
+    Nivel funcional del dominio: Windows Server 2016 (o el mas alto disponible)
+    Marcar: Servidor de sistema de nombres de dominio (DNS)  (ya viene marcado)
+    Contrasena DSRM:              Segura2121...
+    Confirmar contrasena:         Segura2121...
+    Siguiente
+
+  Opciones de DNS:
+    (ignorar advertencia de delegacion, es normal) > Siguiente
+
+  Opciones adicionales:
+    Nombre NetBIOS del dominio: MIGUEL (se autocompleta) > Siguiente
+
+  Rutas:
+    Dejar rutas por defecto (Base de datos, Logs, SYSVOL) > Siguiente
+
+  Revisar opciones:
+    Siguiente
+
+  Comprobacion de requisitos previos:
+    Esperar a que pase la validacion > clic "Instalar"
+
+  El servidor reinicia automaticamente al terminar
+```
+
+**Verificacion (despues del reinicio)**
+```
+Iniciar sesion como MIGUEL\Administrador
+Herramientas administrativas > Usuarios y equipos de Active Directory
+  > confirmar que aparece el dominio miguel.local en el panel izquierdo
 ```
 
 ### 7.3 Unidades organizativas (OU) - desde la interfaz
