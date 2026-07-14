@@ -55,7 +55,7 @@ exit
 ```
 
 ```
-interface f1/0
+interface f0/1
  description Enlace a Peer-B
  ip address 200.13.67.5 255.255.255.252
  no shutdown
@@ -72,7 +72,7 @@ exit
 > R-ISP (Router1) usa unicamente interfaces e0/x (e0/0 hacia Peer-A, e0/1 hacia Peer-B, e0/2 hacia Internet/Cloud1), segun la topologia real. Requiere modulo NM-4E (o similar) en Configure > Slots si el dispositivo no trae 3+ puertos Ethernet integrados.
 
 ```
-interface f0/2
+interface f1/0
  description Enlace hacia Internet
  ip address 10.10.10.2 255.255.255.0
  no shutdown
