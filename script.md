@@ -55,7 +55,7 @@ exit
 ```
 
 ```
-interface f0/1
+interface f1/0
  description Enlace a Peer-B
  ip address 200.13.67.5 255.255.255.252
  no shutdown
