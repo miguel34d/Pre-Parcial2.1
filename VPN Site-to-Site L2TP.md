@@ -394,17 +394,148 @@ write memory
 
 ---
 
-## 9. Windows Server 2022 (AD DS, IIS, NPS)
+## 9. Windows Server 2022 (AD DS, DNS, IIS, NPS) - Configuracion detallada
 
-**Direccionamiento:** IP 10.13.67.10 /24, gateway 10.13.67.1, DNS 127.0.0.1.
+**Direccionamiento:** IP 10.13.67.10 /24, gateway 10.13.67.1, DNS 127.0.0.1 (se autoapunta una vez instalado el rol DNS).
 
-**AD DS:** Agregar roles y caracteristicas > "Servicios de dominio de Active Directory" > Instalar > Promover a controlador de dominio > "Agregar un nuevo bosque" > dominio raiz `miguel.local` > NetBIOS `MIGUEL` > DSRM: `Segura2121...`.
+```
+Administrador del servidor > Panel local > Ethernet > Propiedades
+> Protocolo de Internet version 4 (TCP/IPv4) > Propiedades
+  IP: 10.13.67.10
+  Mascara: 255.255.255.0
+  Puerta de enlace: 10.13.67.1
+  DNS preferido: 127.0.0.1
+```
+```powershell
+Get-NetIPConfiguration
+Test-Connection 10.13.67.1 -Count 2
+```
 
-**IIS:** Agregar roles y caracteristicas > "Servidor Web (IIS)" > Instalar (puerto 80, coincide con la ACL).
+### 9.1 Instalar el rol AD DS
 
-**Grupos y usuarios (dsa.msc):**
+```
+Administrador del servidor > Panel > Agregar roles y caracteristicas
+> Instalacion basada en caracteristicas o en roles > Siguiente
+> Seleccionar el servidor del grupo > Siguiente
+> Roles de servidor: marcar "Servicios de dominio de Active Directory"
+  (aparece un dialogo pidiendo agregar caracteristicas dependientes -> Agregar caracteristicas)
+> Siguiente > Siguiente > Siguiente (pantalla informativa de AD DS) > Instalar
+> Esperar a que termine (NO reiniciar todavia) > Cerrar
+```
 
-| Usuario | SamAccountName | Grupo | Nivel |
+### 9.2 Promover el servidor a controlador de dominio
+
+```
+Administrador del servidor > icono de notificaciones (bandera amarilla)
+> "Promover este servidor a controlador de dominio"
+```
+Asistente de configuracion de Servicios de dominio de Active Directory:
+```
+1) Operacion de implementacion
+   Seleccionar: Agregar un nuevo bosque
+   Nombre de dominio raiz: miguel.local
+
+2) Opciones del controlador de dominio
+   Nivel funcional del bosque y del dominio: Windows Server 2016 (o el mas alto disponible)
+   Dejar marcado: DNS Server
+   (Catalogo global ya viene marcado por ser el primer DC del bosque)
+   Contrasena de restauracion de servicios de directorio (DSRM): Segura2121...
+
+3) Opciones DNS
+   Ignorar la advertencia de delegacion (normal: no hay DNS padre)
+
+4) Opciones adicionales
+   Nombre NetBIOS del dominio: MIGUEL (se autogenera, confirmar)
+
+5) Rutas
+   Dejar las rutas por defecto para NTDS, SYSVOL y logs
+
+6) Revisar opciones > Verificar requisitos previos
+   Las advertencias amarillas son normales; no debe haber errores en rojo
+
+7) Instalar
+   El servidor reinicia solo al terminar
+```
+
+Verificacion tras el reinicio:
+```powershell
+Get-ADDomain
+Get-ADForest
+dcdiag /v
+Get-Service NTDS, DNS, Netlogon, kdc
+nslookup miguel.local 127.0.0.1
+```
+Todos los servicios deben quedar `Running`; `dcdiag` no debe reportar fallas en las pruebas Connectivity/Advertising/Services.
+
+### 9.3 Verificar el rol DNS (se instala junto con AD DS)
+
+```
+Administrador del servidor > Herramientas > DNS
+> Expandir SERVIDOR > Zonas de busqueda directa > miguel.local
+  Deben existir el registro SOA, los NS y los registros A del propio DC
+```
+```powershell
+Get-DnsServerZone
+Resolve-DnsName miguel.local
+```
+
+### 9.4 Instalar el rol IIS (Servidor Web)
+
+```
+Administrador del servidor > Agregar roles y caracteristicas
+> Roles de servidor: marcar "Servidor web (IIS)"
+> Siguiente (sin caracteristicas extra) > Siguiente (servicios de rol por defecto) > Instalar
+```
+```powershell
+Get-WindowsFeature Web-Server
+Invoke-WebRequest http://localhost -UseBasicParsing | Select-Object StatusCode
+```
+Desde Windows10-1 (con la VPN arriba), `http://10.13.67.10` debe mostrar la pagina de bienvenida de IIS (coincide con `permit tcp any host 10.13.67.10 eq 80` de la ACL).
+
+### 9.5 Crear la estructura de OUs, grupos y usuarios
+
+**Por GUI (dsa.msc):**
+```
+Herramientas > Usuarios y equipos de Active Directory
+> clic derecho en miguel.local > Nuevo > Unidad organizativa > "Grupos"
+> repetir > Nuevo > Unidad organizativa > "Usuarios"
+
+> clic derecho OU "Grupos" > Nuevo > Grupo
+  Nombre: ADMINS-15 | Ambito: Global | Tipo: Seguridad
+  (repetir para OPS-10 y USERS-1)
+
+> clic derecho OU "Usuarios" > Nuevo > Usuario
+  Nombre / Apellidos / Inicio de sesion segun la tabla de abajo
+  Asignar contrasena, marcar "La contrasena nunca expira" (uso academico)
+  (repetir para los 6 usuarios)
+
+> por cada usuario: clic derecho > Agregar a un grupo > escribir el nombre del grupo > Aceptar
+```
+
+**Equivalente en PowerShell (mismo resultado, mas rapido de reproducir):**
+```powershell
+New-ADOrganizationalUnit -Name "Grupos"   -Path "DC=miguel,DC=local"
+New-ADOrganizationalUnit -Name "Usuarios" -Path "DC=miguel,DC=local"
+
+New-ADGroup -Name "ADMINS-15" -GroupScope Global -GroupCategory Security -Path "OU=Grupos,DC=miguel,DC=local"
+New-ADGroup -Name "OPS-10"    -GroupScope Global -GroupCategory Security -Path "OU=Grupos,DC=miguel,DC=local"
+New-ADGroup -Name "USERS-1"   -GroupScope Global -GroupCategory Security -Path "OU=Grupos,DC=miguel,DC=local"
+
+$pw = ConvertTo-SecureString "Segura2121..." -AsPlainText -Force
+
+New-ADUser -Name "Miguel Ramirez Meli"       -SamAccountName mramirez   -UserPrincipalName mramirez@miguel.local   -Path "OU=Usuarios,DC=miguel,DC=local" -AccountPassword $pw -Enabled $true
+New-ADUser -Name "Ronald Arcangel Nunez"     -SamAccountName rarcangel  -UserPrincipalName rarcangel@miguel.local  -Path "OU=Usuarios,DC=miguel,DC=local" -AccountPassword $pw -Enabled $true
+New-ADUser -Name "Yolanda Peralta Cruz"      -SamAccountName yperalta   -UserPrincipalName yperalta@miguel.local   -Path "OU=Usuarios,DC=miguel,DC=local" -AccountPassword $pw -Enabled $true
+New-ADUser -Name "Franklin De la Rosa Gomez" -SamAccountName fdelarosa  -UserPrincipalName fdelarosa@miguel.local  -Path "OU=Usuarios,DC=miguel,DC=local" -AccountPassword $pw -Enabled $true
+New-ADUser -Name "Carmen Sosa Bautista"      -SamAccountName csosa      -UserPrincipalName csosa@miguel.local      -Path "OU=Usuarios,DC=miguel,DC=local" -AccountPassword $pw -Enabled $true
+New-ADUser -Name "Elvis Reynoso Tavarez"     -SamAccountName ereynoso   -UserPrincipalName ereynoso@miguel.local   -Path "OU=Usuarios,DC=miguel,DC=local" -AccountPassword $pw -Enabled $true
+
+Add-ADGroupMember -Identity ADMINS-15 -Members mramirez, rarcangel
+Add-ADGroupMember -Identity OPS-10    -Members yperalta, fdelarosa
+Add-ADGroupMember -Identity USERS-1   -Members csosa, ereynoso
+```
+
+| Usuario | SamAccountName | Grupo | Nivel priv-lvl |
 |---|---|---|---|
 | Miguel Ramirez Meli | mramirez | ADMINS-15 | 15 |
 | Ronald Arcangel Nunez | rarcangel | ADMINS-15 | 15 |
@@ -413,14 +544,92 @@ write memory
 | Carmen Sosa Bautista | csosa | USERS-1 | 1 |
 | Elvis Reynoso Tavarez | ereynoso | USERS-1 | 1 |
 
-**NPS:** Agregar roles > "Servicios de directivas y acceso de redes" > nps.msc > Clientes RADIUS: Peer-A (200.13.67.2) y Peer-B (200.13.67.6), secreto `miguel2025`. Directivas por grupo, `cisco-av-pair` = `shell:priv-lvl=15/10/1`. Orden: ADMINS-15 > OPS-10 > USERS-1.
-
-**Verificacion:**
+Verificacion:
 ```powershell
-Get-ADDomain
-Get-ADUser -Filter * -SearchBase "OU=Usuarios,DC=miguel,DC=local"
-Get-ADGroup -Filter * -SearchBase "OU=Grupos,DC=miguel,DC=local"
+Get-ADOrganizationalUnit -Filter *
+Get-ADGroup -Filter * -SearchBase "OU=Grupos,DC=miguel,DC=local" | Select Name
+Get-ADUser  -Filter * -SearchBase "OU=Usuarios,DC=miguel,DC=local" | Select Name, SamAccountName
+Get-ADGroupMember ADMINS-15
+Get-ADGroupMember OPS-10
+Get-ADGroupMember USERS-1
 ```
+
+### 9.6 Instalar el rol NPS
+
+```
+Administrador del servidor > Agregar roles y caracteristicas
+> Roles de servidor: marcar "Servicios de directivas y acceso de redes"
+> Siguiente > Siguiente > Instalar
+```
+
+### 9.7 Registrar los clientes RADIUS (los dos routers)
+
+```
+Herramientas > Servidor de directivas de redes (nps.msc)
+> Clientes y servidores RADIUS > Clientes RADIUS > clic derecho > Nuevo
+  Nombre descriptivo: Peer-A
+  Direccion (IP o DNS): 200.13.67.2
+  Secreto compartido manual: miguel2025
+
+  (repetir) Nombre descriptivo: Peer-B
+  Direccion: 200.13.67.6
+  Secreto compartido manual: miguel2025
+```
+
+### 9.8 Crear las 3 directivas de red (una por nivel de privilegio)
+
+```
+NPS > Directivas > Directivas de red > clic derecho > Nueva directiva de red
+
+Directiva 1 - "ADMINS-15"
+  Condiciones: Agregar > Grupos de Windows > MIGUEL\ADMINS-15
+  Permiso de acceso: Acceso concedido
+  Metodos de autenticacion: CHAP (o PAP segun lo visto en clase)
+  Configuracion > Atributos RADIUS > Vendor Specific > Agregar
+    Proveedor: Cisco
+    Atributo: cisco-av-pair
+    Formato: Cadena
+    Valor: shell:priv-lvl=15
+  Finalizar
+
+Directiva 2 - "OPS-10"
+  Condicion: Grupos de Windows = MIGUEL\OPS-10
+  cisco-av-pair = shell:priv-lvl=10
+
+Directiva 3 - "USERS-1"
+  Condicion: Grupos de Windows = MIGUEL\USERS-1
+  cisco-av-pair = shell:priv-lvl=1
+```
+
+Orden de evaluacion (arrastrar en el panel "Directivas de red" hasta quedar asi, de arriba hacia abajo):
+```
+1. ADMINS-15
+2. OPS-10
+3. USERS-1
+```
+NPS evalua de arriba hacia abajo y aplica la primera directiva que haga match; el orden importa porque un usuario podria calificar para mas de un grupo si la jerarquia no se respeta.
+
+### 9.9 Verificacion completa NPS + RADIUS de extremo a extremo
+
+```powershell
+Get-WindowsFeature NPAS
+Get-Service IAS      # nombre real del servicio de NPS
+```
+```
+Visor de eventos > Registros de Windows > Seguridad
+> filtrar por ID 6272 (acceso concedido) o 6273 (acceso denegado)
+```
+Prueba real desde un router, autenticando con un usuario de cada grupo (ejemplo con yperalta, grupo OPS-10):
+```
+Peer-A> ssh -l yperalta 10.13.67.1
+```
+Debe autenticar contra RADIUS y el nivel de privilegio resultante debe coincidir con el del grupo (15/10/1). Si falla, revisar en el router:
+```
+show radius statistics
+debug radius authentication
+```
+y en el NPS, el Visor de eventos: el motivo de rechazo mas comun es un secreto compartido (`miguel2025`) que no coincide entre el `radius-server host` del router y el cliente RADIUS registrado en NPS.
+
 
 ---
 
