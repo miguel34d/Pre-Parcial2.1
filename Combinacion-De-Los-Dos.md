@@ -1,4 +1,3 @@
-
 # Laboratorio Final - VPN Site-to-Site (IPsec + GRE y L2TP + IPsec)
 **Estudiante:** Miguel Ramirez Meli - Matricula 2025-1367
 **Topologia:** ISP - R1(Peer-A, LAN Servidor) - VPN - R2(Peer-B, LAN Cliente)
