@@ -355,12 +355,31 @@ ip route 10.13.67.0 255.255.255.0 Tunnel0
 show crypto isakmp sa
 show crypto ipsec sa
 show interfaces tunnel0
-show crypto keyring 2025
+show ip interface brief | include Tunnel
 ping 100.13.67.2 source tunnel0
 ```
-`show crypto isakmp sa` debe mostrar `QM_IDLE`, y `show interfaces tunnel0` debe reportar `line protocol is up`. `show crypto keyring 2025` debe mostrar la direccion del peer y la clave `1367`. Si no levanta, revisa que las pre-shared keys coincidan exactamente en ambos routers (`show run | section crypto keyring`).
+`show crypto isakmp sa` debe mostrar `QM_IDLE` con status `ACTIVE`, y `show ip interface brief | include Tunnel` debe reportar `up up`. Si no levanta, revisa que las pre-shared keys coincidan exactamente en ambos routers (`show run | section crypto keyring`).
 
-### 5.C. (Descartado) L2TPv3 + IPsec - no aplicar, solo referencia
+> **Importante:** con `tunnel protection ipsec profile`, el túnel se queda en `up/down` (protocolo caído) hasta que se genera trafico que dispare la negociacion IPsec — un `ping` a la interfaz fisica (`FastEthernet0/0`) **no** cuenta, porque no es trafico GRE. Si el tunel no sube solo, fuerza la negociacion asi:
+> ```
+> interface tunnel0
+>  shutdown
+> exit
+> interface tunnel0
+>  no shutdown
+> exit
+> ```
+> Esto genera el primer paquete GRE "interesante" y arranca la Fase 1/Fase 2 de ISAKMP. Es normal que esto pase tras cada `reload` del router; no hace falta repetir el shut/no shut cada vez, basta con generar cualquier trafico hacia el otro extremo (ej. un ping desde el servidor o el cliente) para que la SA se levante on-demand.
+
+### 5.C. Nota sobre el keyring - limpieza de entrada sobrante
+> El `crypto keyring 2025` no debe tener una entrada con la IP del propio router (solo la del peer remoto). Si por error quedo una entrada asi, se borra con:
+> ```
+> crypto keyring 2025
+>  no pre-shared-key address <IP_PROPIA>
+> exit
+> ```
+
+### 5.D. (Descartado) L2TPv3 + IPsec - no aplicar, solo referencia
 ```
 ! No soportado en feature-set estandar sin SP Services.
 ! Da % Invalid input detected en interface Pseudowire1.
