@@ -151,7 +151,7 @@ ip nat inside source list 1 interface f0/0 overload
 ### Parte 6 - RADIUS (sintaxis clasica, compatible con IOS 12.4)
 ```
 aaa new-model
-radius-server host 10.13.67.10 auth-port 1812 acct-port 1813 key MiguelRadius2025!
+radius-server host 10.13.67.10 auth-port 1812 acct-port 1813 key miguel2025
 aaa authentication login default group radius local
 aaa authorization exec default group radius local
 aaa authorization network default group radius
@@ -253,7 +253,7 @@ exit
 ### Parte 7 - RADIUS (sintaxis clasica)
 ```
 aaa new-model
-radius-server host 10.13.67.10 auth-port 1812 acct-port 1813 key MiguelRadius2025!
+radius-server host 10.13.67.10 auth-port 1812 acct-port 1813 key miguel2025
 aaa authentication login default group radius local
 aaa authorization exec default group radius local
 username miguel privilege 15 secret 20251367
@@ -600,14 +600,33 @@ Clic derecho en miguel.local > Nuevo > Unidad organizativa
   Aceptar
 ```
 
-### 7.4 IIS
+### 7.4 IIS - desde la interfaz
 
-```powershell
-Install-WindowsFeature Web-Server -IncludeManagementTools
+```
+Administrador del servidor > Panel > Agregar roles y caracteristicas
+
+Asistente para agregar roles y caracteristicas:
+  Tipo de instalacion:        Instalacion basada en caracteristicas o roles > Siguiente
+  Seleccionar servidor:       (dejar el servidor local seleccionado) > Siguiente
+  Roles de servidor:          marcar "Servidor Web (IIS)"
+                              > se abre ventana emergente > clic "Agregar caracteristicas"
+                              > Siguiente
+  Caracteristicas:            Siguiente (sin marcar nada extra)
+  Servidor Web IIS (info):    Siguiente
+  Servicios de rol:           dejar las opciones por defecto marcadas > Siguiente
+  Confirmacion:                clic "Instalar"
+  Esperar a que termine       > Cerrar
 ```
 
 ```
 ! Sitio predeterminado queda en puerto 80 (coincide con ACL_HACIA_SERVIDOR)
+```
+
+**Verificacion**
+```
+Herramientas administrativas > Administrador de Internet Information Services (IIS)
+  > Sitios > Default Web Site > confirmar que el estado sea "Started"
+  > desde el propio servidor, abrir un navegador y entrar a http://localhost
 ```
 
 ### 7.5 Grupos y usuarios para niveles de acceso (NPS) - desde la interfaz
@@ -693,8 +712,21 @@ dsa.msc > OU "Grupos" > doble clic en USERS-1   > pestana "Miembros" > confirmar
 
 ### 7.6 Instalar y configurar NPS (RADIUS)
 
-```powershell
-Install-WindowsFeature NPAS -IncludeManagementTools
+**Instalar el rol - desde la interfaz**
+```
+Administrador del servidor > Panel > Agregar roles y caracteristicas
+
+Asistente para agregar roles y caracteristicas:
+  Tipo de instalacion:        Instalacion basada en caracteristicas o roles > Siguiente
+  Seleccionar servidor:       (dejar el servidor local seleccionado) > Siguiente
+  Roles de servidor:          marcar "Servicios de directivas y acceso de redes"
+                              > se abre ventana emergente > clic "Agregar caracteristicas"
+                              > Siguiente
+  Caracteristicas:            Siguiente (sin marcar nada extra)
+  Servicios de directivas y acceso de redes (info): Siguiente
+  Servicios de rol:           dejar marcado "Servidor de directivas de redes" > Siguiente
+  Confirmacion:                clic "Instalar"
+  Esperar a que termine       > Cerrar
 ```
 
 **Clientes RADIUS**
@@ -702,8 +734,8 @@ Install-WindowsFeature NPAS -IncludeManagementTools
 Herramientas administrativas > Servidor de directivas de redes (nps.msc)
 Clientes y servidores RADIUS > Clientes RADIUS > Nuevo
 
-Nombre: Peer-A   | IP: 200.13.67.2 | Secreto compartido: MiguelRadius2025!
-Nombre: Peer-B   | IP: 200.13.67.6 | Secreto compartido: MiguelRadius2025!
+Nombre: Peer-A   | IP: 200.13.67.2 | Secreto compartido: miguel2025
+Nombre: Peer-B   | IP: 200.13.67.6 | Secreto compartido: miguel2025
 ```
 
 **Directivas de red (una por grupo)**
@@ -789,5 +821,6 @@ nltest /dsgetdc:miguel.local
 - **RADIUS**: se cambio a la sintaxis clasica de una linea (`radius-server host ...`) porque el bloque moderno (`radius server NAME` + subcomandos) no es compatible con IOS 12.4(25d).
 - **`crypto key generate rsa`**: ahora funciona porque se agrego un `exit` explicito despues de configurar `line vty 0 4`, así el `ip domain-name` se aplica en modo de configuracion global (antes se estaba ejecutando por error dentro de `(config-line)#`).
 - **VPN usuario/clave (2025/1367)**: se cambio de un `crypto isakmp key` global anonimo a un `crypto keyring 2025` con clave `1367`, para que el "usuario" de la matricula quede visible y verificable directamente en la configuracion (`show crypto keyring`), no solo en la tabla de la seccion 1.
-- **Windows Server (seccion 7)**: se reemplazo la version resumida por comandos completos de `Install-ADDSForest`, creacion de OUs, grupos, 6 usuarios de AD con nombres reales repartidos en ADMINS-15/OPS-10/USERS-1, IIS y NPS con RADIUS clients y directivas Vendor Specific (`cisco-av-pair`).
-- Todas las claves (`20251367`, `MiguelRadius2025!`, `Segura2121...`, etc.) son ejemplos - cambialas si tu institucion exige un estandar distinto.
+- **Windows Server (seccion 7)**: se reemplazo la version resumida por pasos completos con clicks (Agregar roles y caracteristicas + asistentes) para promover el dominio, instalar IIS e instalar NPS; creacion de OUs, grupos y 6 usuarios de AD con nombres reales repartidos en ADMINS-15/OPS-10/USERS-1 tambien con clicks; directivas NPS con Vendor Specific (`cisco-av-pair`).
+- **Clave RADIUS**: se simplifico de `MiguelRadius2025!` a `miguel2025` para que sea mas facil de escribir en los clientes RADIUS y en los routers.
+- Todas las claves (`20251367`, `miguel2025`, `Segura2121...`, etc.) son ejemplos - cambialas si tu institucion exige un estandar distinto.
