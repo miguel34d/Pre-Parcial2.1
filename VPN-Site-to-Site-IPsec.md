@@ -1,0 +1,450 @@
+# Laboratorio Final - VPN Site-to-Site IPsec + GRE
+**Estudiante:** Miguel Ramirez Meli - Matricula 2025-1367
+**Topologia:** ISP - R1(Peer-A, LAN Servidor) - VPN - R2(Peer-B, LAN Cliente)
+
+---
+
+## 1. Plan de direccionamiento IP
+
+| Enlace / Red | Direccion | Interfaz |
+|---|---|---|
+| R-ISP <-> Peer-A | 200.13.67.0/30 | R-ISP f0/0 = .1 / Peer-A f0/0 = .2 |
+| R-ISP <-> Peer-B | 200.13.67.4/30 | R-ISP f0/1 = .5 / Peer-B f0/0 = .6 |
+| LAN Servidor (VLAN 10) | 10.13.67.0/24 | Peer-A f0/1 = .1 (gateway) |
+| LAN Cliente (VLAN 20) | 172.13.67.0/24 | Peer-B f0/1 = .1 (gateway) |
+| WindowsServer2022 | 10.13.67.10/24 | gateway 10.13.67.1 |
+| Windows10-1 | DHCP (pool 172.13.67.0/24) | gateway 172.13.67.1 |
+| Tunel GRE | 100.13.67.0/30 | Tu0 Peer-A=.1 / Tu0 Peer-B=.2 |
+| Credenciales VPN | usuario: **2025** / clave: **1367** | segun matricula 2025-1367 |
+
+> IPsec PSK site-to-site no tiene un campo "usuario" nativo. Para que el **2025** de la matricula quede visible en la config se usa `crypto keyring 2025` con clave `1367` (ver seccion 4).
+
+---
+
+## 2. R-ISP (solo IP publica, sin protocolo de enrutamiento)
+
+```
+enable
+configure terminal
+hostname R-ISP
+no ip domain-lookup
+banner motd # ACCESO SOLO AUTORIZADO - ISP #
+interface f0/0
+ description Enlace a Peer-A
+ ip address 200.13.67.1 255.255.255.252
+ no shutdown
+exit
+interface f0/1
+ description Enlace a Peer-B
+ ip address 200.13.67.5 255.255.255.252
+ no shutdown
+exit
+! Sin RIP/OSPF/EIGRP: ambos enlaces estan directamente conectados
+end
+write memory
+```
+
+---
+
+## 3. Peer-A (R1 - lado Servidor, VLAN 10)
+
+```
+enable
+configure terminal
+hostname Peer-A
+no ip domain-lookup
+service password-encryption
+banner motd # ACCESO SOLO PERSONAL AUTORIZADO - Peer-A #
+enable secret 20251367
+line console 0
+ password 20251367
+ login
+ exec-timeout 5 0
+line vty 0 4
+ transport input ssh
+ exec-timeout 5 0
+exit
+ip domain-name miguel.local
+crypto key generate rsa modulus 2048
+ip ssh version 2
+username miguel privilege 15 secret 20251367
+```
+
+```
+interface f0/0
+ description WAN hacia R-ISP
+ ip address 200.13.67.2 255.255.255.252
+ ip nat outside
+ no shutdown
+exit
+interface f0/1
+ description LAN Servidor VLAN10 hacia Switch1
+ ip address 10.13.67.1 255.255.255.0
+ ip nat inside
+ no shutdown
+exit
+```
+
+```
+ip route 0.0.0.0 0.0.0.0 200.13.67.1
+access-list 1 permit 10.13.67.0 0.0.0.255
+ip nat inside source list 1 interface f0/0 overload
+```
+
+```
+aaa new-model
+radius-server host 10.13.67.10 auth-port 1812 acct-port 1813 key miguel2025
+aaa authentication login default group radius local
+aaa authorization exec default group radius local
+```
+
+**ACL - solo HTTP + ICMP hacia el servidor (bloquea el resto):**
+```
+ip access-list extended ACL_HACIA_SERVIDOR
+ permit udp host 172.13.67.1 host 10.13.67.10 eq 1812
+ permit udp host 172.13.67.1 host 10.13.67.10 eq 1813
+ permit icmp any host 10.13.67.10
+ permit tcp any host 10.13.67.10 eq 80
+ deny ip any host 10.13.67.10
+ permit ip any any
+exit
+```
+> Se aplica sobre `Tunnel0` (seccion 4). Esta ACL es la razon por la que Windows10-1 **no** se une al dominio: DNS(53), Kerberos(88), LDAP(389) y SMB(445) quedan bloqueados. Ver verificacion en seccion 8.
+
+```
+end
+write memory
+```
+
+---
+
+## 4. VPN Site-to-Site IPsec + GRE
+
+> `c3725-adventerprisek9-mz.124-25d` es rama mainline (12.4), no soporta `hash sha256` ni `group 14`. Se usa `hash sha` y `group 5` (si falla, bajar a `group 2`).
+
+**En Peer-A:**
+```
+crypto keyring 2025
+ pre-shared-key address 200.13.67.6 key 1367
+exit
+crypto isakmp policy 10
+ encryption aes 256
+ hash sha
+ authentication pre-share
+ group 5
+exit
+crypto ipsec transform-set TS-GRE esp-aes 256 esp-sha-hmac
+ mode transport
+exit
+crypto ipsec profile PROFILE-GRE
+ set transform-set TS-GRE
+exit
+interface Tunnel0
+ ip address 100.13.67.1 255.255.255.252
+ tunnel source f0/0
+ tunnel destination 200.13.67.6
+ tunnel protection ipsec profile PROFILE-GRE
+ ip access-group ACL_HACIA_SERVIDOR in
+exit
+ip route 172.13.67.0 255.255.255.0 Tunnel0
+end
+write memory
+```
+
+**En Peer-B:**
+```
+crypto keyring 2025
+ pre-shared-key address 200.13.67.2 key 1367
+exit
+crypto isakmp policy 10
+ encryption aes 256
+ hash sha
+ authentication pre-share
+ group 5
+exit
+crypto ipsec transform-set TS-GRE esp-aes 256 esp-sha-hmac
+ mode transport
+exit
+crypto ipsec profile PROFILE-GRE
+ set transform-set TS-GRE
+exit
+interface Tunnel0
+ ip address 100.13.67.2 255.255.255.252
+ tunnel source f0/0
+ tunnel destination 200.13.67.2
+ tunnel protection ipsec profile PROFILE-GRE
+exit
+ip route 10.13.67.0 255.255.255.0 Tunnel0
+end
+write memory
+```
+
+**Verificacion:**
+```
+show crypto isakmp sa
+show crypto ipsec sa
+show ip interface brief | include Tunnel
+ping 100.13.67.2 source tunnel0
+```
+`show crypto isakmp sa` debe mostrar `QM_IDLE`/`ACTIVE`. El tunel queda `up/down` hasta que se genera trafico GRE real (un ping a la IP fisica no cuenta). Si no sube solo tras un `ping` cruzado, forzar con:
+```
+interface tunnel0
+ shutdown
+exit
+interface tunnel0
+ no shutdown
+exit
+```
+
+---
+
+## 5. Peer-B (R2 - lado Cliente, VLAN 20)
+
+```
+enable
+configure terminal
+hostname Peer-B
+no ip domain-lookup
+service password-encryption
+banner motd # ACCESO SOLO PERSONAL AUTORIZADO - Peer-B #
+enable secret 20251367
+line console 0
+ password 20251367
+ login
+ exec-timeout 5 0
+line vty 0 4
+ transport input ssh
+ exec-timeout 5 0
+exit
+ip domain-name miguel.local
+crypto key generate rsa modulus 2048
+ip ssh version 2
+username miguel privilege 15 secret 20251367
+```
+
+```
+interface f0/0
+ description WAN hacia R-ISP
+ ip address 200.13.67.6 255.255.255.252
+ ip nat outside
+ no shutdown
+exit
+interface f0/1
+ description LAN Cliente VLAN20 hacia Switch2
+ ip address 172.13.67.1 255.255.255.0
+ ip nat inside
+ no shutdown
+exit
+```
+
+```
+ip route 0.0.0.0 0.0.0.0 200.13.67.5
+access-list 1 permit 172.13.67.0 0.0.0.255
+ip nat inside source list 1 interface f0/0 overload
+```
+
+```
+ip dhcp excluded-address 172.13.67.1 172.13.67.10
+ip dhcp pool VLAN20_POOL
+ network 172.13.67.0 255.255.255.0
+ default-router 172.13.67.1
+ dns-server 10.13.67.10
+ domain-name miguel.local
+exit
+```
+
+```
+aaa new-model
+radius-server host 10.13.67.10 auth-port 1812 acct-port 1813 key miguel2025
+aaa authentication login default group radius local
+aaa authorization exec default group radius local
+end
+write memory
+```
+
+---
+
+## 6. Switch1 (Servidor) y Switch2 (Cliente)
+
+Ajusta los numeros de puerto segun tu cableado real en GNS3 (confirmar con `show cdp neighbors`).
+
+```
+enable
+configure terminal
+hostname Switch1
+no ip domain-lookup
+banner motd # ACCESO SOLO AUTORIZADO #
+service password-encryption
+enable secret 20251367
+vlan 10
+ name LAN_SERVIDOR
+exit
+ip dhcp snooping
+ip dhcp snooping vlan 10
+no ip dhcp snooping information option
+interface range e0/0 - 1
+ switchport mode access
+ switchport access vlan 10
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+exit
+interface e0/1
+ switchport port-security
+ switchport port-security maximum 1
+ switchport port-security mac-address sticky
+ switchport port-security violation shutdown
+exit
+interface e0/0
+ ip dhcp snooping trust
+ spanning-tree guard root
+exit
+line vty 0 4
+ transport input ssh
+ login local
+exit
+username miguel privilege 15 secret 20251367
+end
+write memory
+```
+
+```
+enable
+configure terminal
+hostname Switch2
+no ip domain-lookup
+banner motd # ACCESO SOLO AUTORIZADO #
+service password-encryption
+enable secret 20251367
+vlan 20
+ name LAN_CLIENTE
+exit
+ip dhcp snooping
+ip dhcp snooping vlan 20
+no ip dhcp snooping information option
+interface range e0/0 - 1
+ switchport mode access
+ switchport access vlan 20
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+exit
+interface e0/1
+ switchport port-security
+ switchport port-security maximum 1
+ switchport port-security mac-address sticky
+ switchport port-security violation shutdown
+exit
+interface e0/0
+ ip dhcp snooping trust
+ spanning-tree guard root
+exit
+line vty 0 4
+ transport input ssh
+ login local
+exit
+username miguel privilege 15 secret 20251367
+end
+write memory
+```
+> `no ip dhcp snooping information option` desactiva la insercion de option 82: en GNS3, con snooping activo, option 82 puede impedir que se completen los bindings DHCP entre switch y router.
+
+---
+
+## 7. Windows Server 2022 (AD DS, IIS, NPS)
+
+**Direccionamiento:** IP 10.13.67.10 /24, gateway 10.13.67.1, DNS 127.0.0.1.
+
+**AD DS:** Administrador del servidor > Agregar roles y caracteristicas > "Servicios de dominio de Active Directory" > Instalar > Promover a controlador de dominio > "Agregar un nuevo bosque" > dominio raiz `miguel.local` > NetBIOS `MIGUEL` > DSRM: `Segura2121...`.
+
+**IIS:** Agregar roles y caracteristicas > "Servidor Web (IIS)" > Instalar (puerto 80 por defecto, coincide con la ACL).
+
+**Grupos y usuarios (dsa.msc):**
+
+| Usuario | SamAccountName | Grupo | Nivel |
+|---|---|---|---|
+| Miguel Ramirez Meli | mramirez | ADMINS-15 | 15 |
+| Ronald Arcangel Nunez | rarcangel | ADMINS-15 | 15 |
+| Yolanda Peralta Cruz | yperalta | OPS-10 | 10 |
+| Franklin De la Rosa Gomez | fdelarosa | OPS-10 | 10 |
+| Carmen Sosa Bautista | csosa | USERS-1 | 1 |
+| Elvis Reynoso Tavarez | ereynoso | USERS-1 | 1 |
+
+Crear OUs "Grupos" y "Usuarios", los 3 grupos de seguridad globales (ADMINS-15, OPS-10, USERS-1), los 6 usuarios, y agregar cada uno a su grupo.
+
+**NPS:** Agregar roles > "Servicios de directivas y acceso de redes" > nps.msc > Clientes RADIUS: Peer-A (200.13.67.2) y Peer-B (200.13.67.6), secreto `miguel2025`. Directivas de red (una por grupo), condicion = Windows Groups, atributo Vendor Specific Cisco `cisco-av-pair` = `shell:priv-lvl=15/10/1` segun el grupo. Orden: ADMINS-15 > OPS-10 > USERS-1.
+
+**Verificacion:**
+```powershell
+Get-ADDomain
+Get-ADUser -Filter * -SearchBase "OU=Usuarios,DC=miguel,DC=local"
+Get-ADGroup -Filter * -SearchBase "OU=Grupos,DC=miguel,DC=local"
+```
+
+---
+
+## 8. Windows10-1 (Cliente - VLAN 20)
+
+**1) NIC en DHCP**
+```
+Panel de control > Redes e Internet > Centro de redes y recursos compartidos
+> Cambiar configuracion del adaptador > NIC1 > Propiedades > IPv4
+  Seleccionar: "Obtener una direccion IP automaticamente"
+  Seleccionar: "Obtener la direccion del servidor DNS automaticamente"
+```
+```powershell
+ipconfig /release
+ipconfig /renew
+ipconfig /all
+```
+Debe recibir IP entre `172.13.67.11` y `172.13.67.254`, gateway `172.13.67.1`, DNS `10.13.67.10`.
+
+**2) Trafico permitido (debe funcionar, cruza la VPN)**
+```powershell
+ping 10.13.67.10
+```
+```
+Navegador > http://10.13.67.10
+```
+Ambos deben responder: `permit icmp` y `permit tcp ... eq 80` estan en la ACL.
+
+**3) Trafico bloqueado (debe fallar - confirma la ACL)**
+```powershell
+Test-NetConnection 10.13.67.10 -Port 445
+Test-NetConnection 10.13.67.10 -Port 389
+nslookup miguel.local 10.13.67.10
+```
+Los tres deben fallar / no responder (`TcpTestSucceeded : False`).
+
+**4) Intento de union al dominio (verificacion de que la ACL cumple el requisito "bloquear el resto")**
+```powershell
+Add-Computer -DomainName "miguel.local" -Credential (Get-Credential) -Restart
+```
+Este comando debe **fallar** (timeout o "no se pudo contactar el dominio"), porque DNS(53), Kerberos(88) y LDAP(389) estan bloqueados en `ACL_HACIA_SERVIDOR`. Es el resultado esperado y correcto: confirma que solo HTTP+ICMP llegan al servidor. Windows10-1 se queda en **workgroup** con inicio de sesion local.
+
+**5) Resumen de verificacion**
+```powershell
+Test-NetConnection 10.13.67.10 -InformationLevel Detailed   # ping -> True
+Test-NetConnection 10.13.67.10 -Port 80                     # HTTP -> True
+Test-NetConnection 10.13.67.10 -Port 445                    # SMB -> False
+Test-NetConnection 10.13.67.10 -Port 389                    # LDAP -> False
+```
+
+---
+
+## 9. Checklist contra el enunciado
+
+| Requisito | Cumplido en |
+|---|---|
+| Port-Security, MOTD | Seccion 6 / todas las secciones |
+| Medidas ante ataques vistos en clase | Seccion 6 (DHCP snooping, port-security, root guard, bpduguard) |
+| Direccionamiento IP por matricula | Seccion 1 |
+| DHCP para la LAN | Seccion 5; verificado en 8 |
+| Ruta por defecto | Secciones 2, 3, 5 |
+| NAT | Secciones 3, 5 |
+| Autenticacion RADIUS | Secciones 3, 5, 7 |
+| Comunicacion entre LANs solo por VPN | Seccion 4 (rutas via Tunnel0) |
+| Solo HTTP+ICMP al servidor | ACL_HACIA_SERVIDOR, seccion 3; verificado en 8 |
+| VPN Site-to-Site IPsec + GRE | Seccion 4 |
+| ISP sin protocolo de enrutamiento | Seccion 2 |
+| Windows Server: AD, IIS, NPS | Seccion 7 |
+| NPS niveles 15/10/1 | Seccion 7 |
+| Credenciales VPN = matricula (usuario 2025 / clave 1367) | Seccion 1 y 4 |
