@@ -510,6 +510,8 @@ write memory
 enable
 configure terminal
 
+aaa new-model
+
 radius-server host 20.13.67.10 auth-port 1812 acct-port 1813 key RadiusKey123
 
 aaa group server radius RADIUS_NPS
@@ -517,8 +519,6 @@ aaa group server radius RADIUS_NPS
 
 aaa authentication login VTY_AUTH group RADIUS_NPS local
 aaa authorization exec VTY_AUTH group RADIUS_NPS local
-
-ip radius source-interface FastEthernet0/1
 
 line vty 0 4
  login authentication VTY_AUTH
