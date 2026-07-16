@@ -486,12 +486,10 @@ El login administrativo (consola/Telnet/SSH) de **R3** y **R4** ahora se valida 
 enable
 configure terminal
 
-radius server NPS_SERVER
- address ipv4 20.13.67.10 auth-port 1812 acct-port 1813
- key RadiusKey123
+radius-server host 20.13.67.10 auth-port 1812 acct-port 1813 key RadiusKey123
 
 aaa group server radius RADIUS_NPS
- server name NPS_SERVER
+ server 20.13.67.10 auth-port 1812 acct-port 1813
 
 aaa authentication login VTY_AUTH group RADIUS_NPS local
 aaa authorization exec VTY_AUTH group RADIUS_NPS local
@@ -504,18 +502,18 @@ end
 write memory
 ```
 
+> **Nota de compatibilidad:** en IOS antiguos (12.x, típico de Packet Tracer/GNS3) no existe la sintaxis nueva `radius server NOMBRE` / `server name`. Se usa la forma clásica `radius-server host <ip> ...` + `server <ip> ...` dentro del grupo, como arriba. Si tu IOS es 15.x+ y sí soporta la sintaxis nueva, también funcionaría `radius server NPS_SERVER` / `address ipv4 ...` / `server name NPS_SERVER`, pero la forma clásica funciona en cualquier versión.
+
 **En R4** (llega al NPS a través del túnel IPsec site-to-site ya existente hacia 20.13.67.0/24):
 
 ```
 enable
 configure terminal
 
-radius server NPS_SERVER
- address ipv4 20.13.67.10 auth-port 1812 acct-port 1813
- key RadiusKey123
+radius-server host 20.13.67.10 auth-port 1812 acct-port 1813 key RadiusKey123
 
 aaa group server radius RADIUS_NPS
- server name NPS_SERVER
+ server 20.13.67.10 auth-port 1812 acct-port 1813
 
 aaa authentication login VTY_AUTH group RADIUS_NPS local
 aaa authorization exec VTY_AUTH group RADIUS_NPS local
